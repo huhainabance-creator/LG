@@ -1,51 +1,56 @@
 --[[
-    ULTRA FPS BOOST (Roblox)
-    Максимальний буст FPS: вимикає тіні, ефекти, текстури, частинки,
-    воду, траву, постобробку, ставить мінімальну якість рендеру
-    і обробляє всі нові об'єкти, що з'являються в грі.
+    ULTRA FPS BOOST v2 (Roblox)
+    Максимальний буст FPS: тіні, світло, ефекти, текстури, частинки,
+    вода, трава, небо, постобробка, Highlight, світові GUI — все вимкнено.
+    Нові об'єкти обробляються автоматично.
 
-    Запуск: вставити в executor (або як LocalScript у StarterPlayerScripts).
-    Налаштування нижче в таблиці CONFIG.
+    Клавіші:
+      RightControl — вимкнути/увімкнути 3D-рендер повністю (для AFK, FPS у стелю)
+    Коли вікно Roblox згорнуте — 3D вимикається сам, FPS знижується (менше навантаження на ПК).
 ]]
 
 local CONFIG = {
     FPS_CAP              = 999,   -- ліміт FPS (потрібен setfpscap в executor)
-    REMOVE_TEXTURES      = true,  -- прибрати Decal/Texture/SurfaceAppearance і текстури мешів
+    UNFOCUSED_FPS        = 15,    -- FPS коли вікно згорнуте / не в фокусі
+    PAUSE_3D_UNFOCUSED   = true,  -- вимикати 3D-рендер, коли вікно не в фокусі
+    TOGGLE_3D_KEY        = Enum.KeyCode.RightControl,
+    DELETE_TEXTURES      = true,  -- видалити Decal/Texture/SurfaceAppearance, текстури мешів
     PLASTIC_MATERIALS    = true,  -- усі матеріали -> SmoothPlastic
-    DISABLE_PARTICLES    = true,  -- частинки, сліди, промені, вогонь, дим
-    DISABLE_POST_EFFECTS = true,  -- Bloom, Blur, SunRays, ColorCorrection, DOF
-    REMOVE_SKY_AND_ATMO  = true,  -- Sky, Atmosphere, Clouds
-    LOW_WATER_AND_GRASS  = true,  -- вода без хвиль/відбиттів, без трави
-    HIDE_ACCESSORIES     = false, -- сховати аксесуари інших гравців (шапки і т.д.)
-    REMOVE_CLOTHES       = false, -- прибрати одяг (Shirt/Pants) у всіх
+    DELETE_PARTICLES     = true,  -- видалити частинки, сліди, промені, вогонь, дим
+    DISABLE_LIGHTS       = true,  -- вимкнути всі джерела світла (PointLight/SpotLight/SurfaceLight)
+    DISABLE_HIGHLIGHTS   = true,  -- вимкнути Highlight (дуже важкий ефект)
+    DISABLE_WORLD_GUIS   = true,  -- вимкнути SurfaceGui/BillboardGui на карті (таблички, написи)
+    DISABLE_VIEWPORTS    = false, -- сховати ViewportFrame в інтерфейсі (може сховати прев'ю в магазині)
     LOW_MESH_DETAIL      = true,  -- мінімальна деталізація мешів
-    DISABLE_3D_SOUND_FX  = true,  -- вимкнути звукові ефекти (Reverb, Echo і т.д.)
-    SHOW_FPS_COUNTER     = true,  -- показувати лічильник FPS
-    BATCH_SIZE           = 400,   -- скільки об'єктів обробляти за кадр (менше = без фризу на старті)
+    FIELD_OF_VIEW        = nil,   -- напр. 60 (менше FOV = менше об'єктів у кадрі), nil = не чіпати
+    BATCH_SIZE           = 500,   -- скільки об'єктів обробляти за кадр
 }
 
 ---------------------------------------------------------------------
-local Players     = game:GetService("Players")
-local Lighting    = game:GetService("Lighting")
-local RunService  = game:GetService("RunService")
-local Workspace   = game:GetService("Workspace")
-local LocalPlayer = Players.LocalPlayer
+local Players          = game:GetService("Players")
+local Lighting         = game:GetService("Lighting")
+local RunService       = game:GetService("RunService")
+local Workspace        = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer      = Players.LocalPlayer
 
-local function try(f, ...) local ok, r = pcall(f, ...) return ok, r end
+local function try(f, ...) return pcall(f, ...) end
 
 local function setHidden(obj, prop, val)
-    if sethiddenproperty then
-        try(sethiddenproperty, obj, prop, val)
-    end
+    if sethiddenproperty then try(sethiddenproperty, obj, prop, val) end
     try(function() obj[prop] = val end)
+end
+
+local function setCap(n)
+    if setfpscap then try(setfpscap, n) end
 end
 
 ---------------------------------------------------------------------
 -- 1. FPS cap
-if setfpscap then try(setfpscap, CONFIG.FPS_CAP) end
+setCap(CONFIG.FPS_CAP)
 
 ---------------------------------------------------------------------
--- 2. Глобальні налаштування рендеру
+-- 2. Глобальні налаштування рендеру / фізики
 try(function()
     local r = settings().Rendering
     r.QualityLevel = Enum.QualityLevel.Level01
@@ -56,74 +61,79 @@ try(function()
 end)
 try(function() settings().Physics.PhysicsEnvironmentalThrottle = Enum.EnviromentalPhysicsThrottle.DefaultAuto end)
 try(function() settings().Physics.AllowSleep = true end)
-try(function() settings().Network.IncomingReplicationLag = 0 end)
-
 try(function()
     local ugs = UserSettings():GetService("UserGameSettings")
     ugs.SavedQualityLevel = Enum.SavedQualitySetting.QualityLevel1
     ugs.GraphicsQualityLevel = 1
 end)
-
--- Старі матеріали (легші за 2022 PBR)
-try(function()
-    local ms = game:GetService("MaterialService")
-    setHidden(ms, "Use2022Materials", false)
-end)
+try(function() setHidden(game:GetService("MaterialService"), "Use2022Materials", false) end)
+try(function() setHidden(Workspace, "InterpolationThrottling", Enum.InterpolationThrottlingMode.Enabled) end)
+try(function() setHidden(Workspace, "LevelOfDetail", Enum.ModelLevelOfDetail.Automatic) end)
 
 ---------------------------------------------------------------------
 -- 3. Освітлення
 local function optimizeLighting()
     Lighting.GlobalShadows = false
-    Lighting.FogEnd = 9e9
     Lighting.FogStart = 9e9
+    Lighting.FogEnd = 9e9
     Lighting.ShadowSoftness = 0
+    Lighting.Brightness = 2
+    Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
+    Lighting.Ambient = Color3.fromRGB(100, 100, 100)
     try(function() Lighting.EnvironmentDiffuseScale = 0 end)
     try(function() Lighting.EnvironmentSpecularScale = 0 end)
     setHidden(Lighting, "Technology", Enum.Technology.Compatibility)
-    Lighting.Brightness = 2
-    Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
 end
 try(optimizeLighting)
 
-local POST_FX = {
+Lighting:GetPropertyChangedSignal("GlobalShadows"):Connect(function()
+    if Lighting.GlobalShadows then Lighting.GlobalShadows = false end
+end)
+Lighting:GetPropertyChangedSignal("FogEnd"):Connect(function()
+    if Lighting.FogEnd < 9e9 then Lighting.FogEnd = 9e9 end
+end)
+Lighting:GetPropertyChangedSignal("Technology"):Connect(function()
+    setHidden(Lighting, "Technology", Enum.Technology.Compatibility)
+end)
+
+---------------------------------------------------------------------
+-- 4. Terrain
+try(function()
+    local t = Workspace:FindFirstChildOfClass("Terrain")
+    if t then
+        t.WaterWaveSize = 0
+        t.WaterWaveSpeed = 0
+        t.WaterReflectance = 0
+        t.WaterTransparency = 0
+        setHidden(t, "Decoration", false)
+        t.CastShadow = false
+    end
+end)
+
+---------------------------------------------------------------------
+-- 5. Класи
+local DELETE_ALWAYS = {
     BloomEffect = true, BlurEffect = true, SunRaysEffect = true,
     ColorCorrectionEffect = true, DepthOfFieldEffect = true,
+    Sky = true, Atmosphere = true, Clouds = true,
 }
-local SKY_FX = { Sky = true, Atmosphere = true, Clouds = true }
-
----------------------------------------------------------------------
--- 4. Terrain (вода і трава)
-if CONFIG.LOW_WATER_AND_GRASS then
-    try(function()
-        local t = Workspace:FindFirstChildOfClass("Terrain")
-        if t then
-            t.WaterWaveSize = 0
-            t.WaterWaveSpeed = 0
-            t.WaterReflectance = 0
-            t.WaterTransparency = 0
-            setHidden(t, "Decoration", false)
-        end
-    end)
-end
-
----------------------------------------------------------------------
--- 5. Обробка одного об'єкта
-local PARTICLE_CLASSES = {
+local PARTICLES = {
     ParticleEmitter = true, Trail = true, Beam = true,
     Smoke = true, Fire = true, Sparkles = true,
 }
+local TEXTURES = {
+    Decal = true, Texture = true, SurfaceAppearance = true, MaterialVariant = true,
+}
+local LIGHTS = { PointLight = true, SpotLight = true, SurfaceLight = true }
 local SOUND_FX = {
     ReverbSoundEffect = true, EchoSoundEffect = true, ChorusSoundEffect = true,
     DistortionSoundEffect = true, FlangeSoundEffect = true, TremoloSoundEffect = true,
     PitchShiftSoundEffect = true, EqualizerSoundEffect = true, CompressorSoundEffect = true,
 }
-
-local function isOtherCharacterPart(obj)
-    local model = obj:FindFirstAncestorOfClass("Model")
-    if not model then return false end
-    local plr = Players:GetPlayerFromCharacter(model)
-    return plr ~= nil and plr ~= LocalPlayer
-end
+local KEEP_MATERIAL = {
+    [Enum.Material.Glass] = true, [Enum.Material.ForceField] = true,
+    [Enum.Material.Neon] = true,
+}
 
 local function optimize(obj)
     local class = obj.ClassName
@@ -131,127 +141,107 @@ local function optimize(obj)
     if obj:IsA("BasePart") then
         obj.CastShadow = false
         obj.Reflectance = 0
-        if CONFIG.PLASTIC_MATERIALS and obj.Material ~= Enum.Material.Glass
-            and obj.Material ~= Enum.Material.ForceField then
+        if CONFIG.PLASTIC_MATERIALS and not KEEP_MATERIAL[obj.Material] then
             obj.Material = Enum.Material.SmoothPlastic
         end
         if obj:IsA("MeshPart") then
-            if CONFIG.REMOVE_TEXTURES then obj.TextureID = "" end
+            if CONFIG.DELETE_TEXTURES then obj.TextureID = "" end
             if CONFIG.LOW_MESH_DETAIL then
                 setHidden(obj, "RenderFidelity", Enum.RenderFidelity.Performance)
             end
-        elseif obj:IsA("UnionOperation") and CONFIG.LOW_MESH_DETAIL then
+        elseif obj:IsA("PartOperation") and CONFIG.LOW_MESH_DETAIL then
             setHidden(obj, "RenderFidelity", Enum.RenderFidelity.Performance)
         end
         return
     end
 
-    if CONFIG.REMOVE_TEXTURES then
-        if class == "Decal" or class == "Texture" then
-            obj.Transparency = 1
-            return
-        elseif class == "SurfaceAppearance" or class == "MaterialVariant" then
-            obj:Destroy()
-            return
-        elseif class == "SpecialMesh" then
-            obj.TextureId = ""
-            return
-        end
+    if DELETE_ALWAYS[class] then obj:Destroy() return end
+
+    if CONFIG.DELETE_TEXTURES then
+        if TEXTURES[class] then obj:Destroy() return end
+        if class == "SpecialMesh" then obj.TextureId = "" return end
     end
 
-    if CONFIG.DISABLE_PARTICLES then
-        if PARTICLE_CLASSES[class] then
-            obj.Enabled = false
-            return
-        elseif class == "Explosion" then
-            obj.BlastPressure = 1
-            obj.BlastRadius = 1
-            obj.Visible = false
-            return
-        end
+    if CONFIG.DELETE_PARTICLES then
+        if PARTICLES[class] then obj:Destroy() return end
+        if class == "Explosion" then obj.Visible = false return end
     end
 
-    if POST_FX[class] and CONFIG.DISABLE_POST_EFFECTS then
+    if CONFIG.DISABLE_LIGHTS and LIGHTS[class] then obj.Enabled = false return end
+    if CONFIG.DISABLE_HIGHLIGHTS and class == "Highlight" then obj.Enabled = false return end
+    if SOUND_FX[class] then obj.Enabled = false return end
+
+    if CONFIG.DISABLE_WORLD_GUIS and (class == "SurfaceGui" or class == "BillboardGui") then
         obj.Enabled = false
         return
     end
-
-    if SKY_FX[class] and CONFIG.REMOVE_SKY_AND_ATMO then
-        obj:Destroy()
-        return
-    end
-
-    if class == "PointLight" or class == "SpotLight" or class == "SurfaceLight" then
-        obj.Shadows = false
-        return
-    end
-
-    if CONFIG.DISABLE_3D_SOUND_FX and SOUND_FX[class] then
-        obj.Enabled = false
-        return
-    end
-
-    if class == "Accessory" and CONFIG.HIDE_ACCESSORIES and isOtherCharacterPart(obj) then
-        obj:Destroy()
-        return
-    end
-
-    if CONFIG.REMOVE_CLOTHES and (class == "Shirt" or class == "Pants" or class == "ShirtGraphic") then
-        obj:Destroy()
+    if CONFIG.DISABLE_VIEWPORTS and class == "ViewportFrame" then
+        obj.Visible = false
         return
     end
 end
 
-local function safeOptimize(obj)
-    pcall(optimize, obj)
-end
+local function safeOptimize(obj) pcall(optimize, obj) end
 
 ---------------------------------------------------------------------
--- 6. Прохід по всій грі пачками (щоб не було фризу)
+-- 6. Прохід по грі пачками + нові об'єкти
 local function processContainer(container)
     local list = container:GetDescendants()
     for i = 1, #list do
         safeOptimize(list[i])
-        if i % CONFIG.BATCH_SIZE == 0 then
-            RunService.Heartbeat:Wait()
-        end
+        if i % CONFIG.BATCH_SIZE == 0 then RunService.Heartbeat:Wait() end
     end
 end
 
-for _, obj in ipairs(Lighting:GetChildren()) do safeOptimize(obj) end
-task.spawn(processContainer, Workspace)
-task.spawn(function()
-    local cam = Workspace.CurrentCamera
-    if cam then processContainer(cam) end
-end)
+local function hook(container)
+    task.spawn(processContainer, container)
+    container.DescendantAdded:Connect(function(obj) task.defer(safeOptimize, obj) end)
+end
 
--- Нові об'єкти (підвантаження карти, ефекти зброї, нові гравці)
-Workspace.DescendantAdded:Connect(function(obj)
-    task.defer(safeOptimize, obj)
-end)
-Lighting.DescendantAdded:Connect(function(obj)
-    task.defer(safeOptimize, obj)
-end)
-
--- Деякі ігри повертають тіні/туман скриптами — повертаємо назад
-Lighting:GetPropertyChangedSignal("GlobalShadows"):Connect(function()
-    if Lighting.GlobalShadows then Lighting.GlobalShadows = false end
-end)
-Lighting:GetPropertyChangedSignal("FogEnd"):Connect(function()
-    if Lighting.FogEnd < 9e9 then Lighting.FogEnd = 9e9 end
-end)
+hook(Workspace)
+hook(Lighting)
+if CONFIG.DISABLE_VIEWPORTS then
+    task.spawn(function() hook(LocalPlayer:WaitForChild("PlayerGui")) end)
+end
 
 ---------------------------------------------------------------------
--- 7. Очистка пам'яті
-task.spawn(function()
-    while task.wait(60) do
-        try(function() collectgarbage("collect") end)
+-- 7. Камера
+if CONFIG.FIELD_OF_VIEW then
+    local function applyFov()
+        local cam = Workspace.CurrentCamera
+        if cam then cam.FieldOfView = CONFIG.FIELD_OF_VIEW end
+    end
+    applyFov()
+    Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(applyFov)
+end
+
+---------------------------------------------------------------------
+-- 8. Вимкнення 3D (клавіша + коли вікно не в фокусі)
+local manual3DOff = false
+local function set3D(on) try(function() RunService:Set3dRenderingEnabled(on) end) end
+
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.KeyCode == CONFIG.TOGGLE_3D_KEY then
+        manual3DOff = not manual3DOff
+        set3D(not manual3DOff)
     end
 end)
 
+if CONFIG.PAUSE_3D_UNFOCUSED then
+    UserInputService.WindowFocusReleased:Connect(function()
+        set3D(false)
+        setCap(CONFIG.UNFOCUSED_FPS)
+    end)
+    UserInputService.WindowFocused:Connect(function()
+        set3D(not manual3DOff)
+        setCap(CONFIG.FPS_CAP)
+    end)
+end
+
 ---------------------------------------------------------------------
--- 8. Лічильник FPS
-if CONFIG.SHOW_FPS_COUNTER then
+-- 9. Лічильник FPS
+do
     local gui = Instance.new("ScreenGui")
     gui.Name = "UltraFPSCounter"
     gui.ResetOnSpawn = false
@@ -271,7 +261,7 @@ if CONFIG.SHOW_FPS_COUNTER then
     label.Parent = gui
 
     local frames, last = 0, os.clock()
-    RunService.RenderStepped:Connect(function()
+    RunService.Heartbeat:Connect(function()
         frames += 1
         local now = os.clock()
         if now - last >= 0.5 then
@@ -281,4 +271,4 @@ if CONFIG.SHOW_FPS_COUNTER then
     end)
 end
 
-print("[UltraFPSBoost] Активовано")
+print("[UltraFPSBoost v2] Активовано")
