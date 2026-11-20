@@ -1,29 +1,44 @@
 --[[
-    ULTRA FPS BOOST v2 (Roblox)
-    Максимальний буст FPS: тіні, світло, ефекти, текстури, частинки,
-    вода, трава, небо, постобробка, Highlight, світові GUI — все вимкнено.
-    Нові об'єкти обробляються автоматично.
+    ULTRA FPS BOOST v3 (Roblox)
+    Тіні, світло, ефекти, текстури, частинки, вода, трава, небо, постобробка,
+    Highlight, світові GUI, декор карти, ВСІ звуки і ВСІ анімації — вимкнено.
+    + Дальність прорисовки: все, що далі RENDER_DISTANCE, не малюється.
 
     Клавіші:
-      RightControl — вимкнути/увімкнути 3D-рендер повністю (для AFK, FPS у стелю)
-    Коли вікно Roblox згорнуте — 3D вимикається сам, FPS знижується (менше навантаження на ПК).
+      RightControl — вимкнути/увімкнути 3D-рендер повністю (для AFK)
+    Коли вікно Roblox згорнуте — 3D вимикається сам, FPS знижується.
 ]]
 
 local CONFIG = {
     FPS_CAP              = 999,   -- ліміт FPS (потрібен setfpscap в executor)
-    UNFOCUSED_FPS        = 15,    -- FPS коли вікно згорнуте / не в фокусі
-    PAUSE_3D_UNFOCUSED   = true,  -- вимикати 3D-рендер, коли вікно не в фокусі
+    UNFOCUSED_FPS        = 15,    -- FPS коли вікно не в фокусі
+    PAUSE_3D_UNFOCUSED   = true,
     TOGGLE_3D_KEY        = Enum.KeyCode.RightControl,
-    DELETE_TEXTURES      = true,  -- видалити Decal/Texture/SurfaceAppearance, текстури мешів
-    PLASTIC_MATERIALS    = true,  -- усі матеріали -> SmoothPlastic
-    DELETE_PARTICLES     = true,  -- видалити частинки, сліди, промені, вогонь, дим
-    DISABLE_LIGHTS       = true,  -- вимкнути всі джерела світла (PointLight/SpotLight/SurfaceLight)
-    DISABLE_HIGHLIGHTS   = true,  -- вимкнути Highlight (дуже важкий ефект)
-    DISABLE_WORLD_GUIS   = true,  -- вимкнути SurfaceGui/BillboardGui на карті (таблички, написи)
-    DISABLE_VIEWPORTS    = false, -- сховати ViewportFrame в інтерфейсі (може сховати прев'ю в магазині)
-    LOW_MESH_DETAIL      = true,  -- мінімальна деталізація мешів
-    FIELD_OF_VIEW        = nil,   -- напр. 60 (менше FOV = менше об'єктів у кадрі), nil = не чіпати
-    BATCH_SIZE           = 500,   -- скільки об'єктів обробляти за кадр
+
+    -- Дальність прорисовки
+    RENDER_DISTANCE      = 250,   -- у студах; nil = вимкнути цю функцію
+    CULL_INTERVAL        = 0.4,   -- як часто оновлювати (сек)
+
+    -- Декор карти
+    DELETE_DECOR         = true,  -- видаляти дерева/кущі/траву/квіти/каміння і дрібний декор
+    DECOR_KEYWORDS       = {      -- назви (маленькими літерами), які вважаються декором
+        "tree", "bush", "leaf", "leaves", "grass", "flower", "plant", "foliage",
+        "shrub", "fern", "vine", "mushroom", "pebble", "decor", "rock", "stone",
+    },
+    DECOR_MAX_SIZE       = 25,    -- декор, у який можна впертися, видаляється тільки якщо менший за це
+    SMALL_DECOR_SIZE     = 4,     -- дрібні непрохідні деталі (болти, гілочки) менші за це видаляються
+
+    DELETE_TEXTURES      = true,
+    PLASTIC_MATERIALS    = true,
+    DELETE_PARTICLES     = true,
+    DISABLE_LIGHTS       = true,
+    DISABLE_HIGHLIGHTS   = true,
+    DISABLE_WORLD_GUIS   = true,  -- таблички/написи на карті
+    DISABLE_SOUNDS       = true,  -- ВСІ звуки
+    DISABLE_ANIMATIONS   = true,  -- ВСІ анімації (гравці, NPC, моби, предмети)
+    LOW_MESH_DETAIL      = true,
+    FIELD_OF_VIEW        = nil,   -- напр. 60; nil = не чіпати
+    BATCH_SIZE           = 500,
 }
 
 ---------------------------------------------------------------------
@@ -50,7 +65,7 @@ end
 setCap(CONFIG.FPS_CAP)
 
 ---------------------------------------------------------------------
--- 2. Глобальні налаштування рендеру / фізики
+-- 2. Рендер / фізика
 try(function()
     local r = settings().Rendering
     r.QualityLevel = Enum.QualityLevel.Level01
@@ -65,13 +80,17 @@ try(function()
     local ugs = UserSettings():GetService("UserGameSettings")
     ugs.SavedQualityLevel = Enum.SavedQualitySetting.QualityLevel1
     ugs.GraphicsQualityLevel = 1
+    if CONFIG.DISABLE_SOUNDS then ugs.MasterVolume = 0 end
 end)
 try(function() setHidden(game:GetService("MaterialService"), "Use2022Materials", false) end)
 try(function() setHidden(Workspace, "InterpolationThrottling", Enum.InterpolationThrottlingMode.Enabled) end)
 try(function() setHidden(Workspace, "LevelOfDetail", Enum.ModelLevelOfDetail.Automatic) end)
+if CONFIG.DISABLE_SOUNDS then
+    try(function() game:GetService("SoundService").AmbientReverb = Enum.ReverbType.NoReverb end)
+end
 
 ---------------------------------------------------------------------
--- 3. Освітлення
+-- 3. Освітлення (без тіней)
 local function optimizeLighting()
     Lighting.GlobalShadows = false
     Lighting.FogStart = 9e9
@@ -135,10 +154,108 @@ local KEEP_MATERIAL = {
     [Enum.Material.Neon] = true,
 }
 
+---------------------------------------------------------------------
+-- 6. Допоміжне: персонажі, інструменти, декор
+local function isInCharacterOrTool(obj)
+    if obj:FindFirstAncestorWhichIsA("Tool") or obj:FindFirstAncestorWhichIsA("Accessory") then
+        return true
+    end
+    local model = obj:FindFirstAncestorWhichIsA("Model")
+    while model do
+        if model:FindFirstChildOfClass("Humanoid") then return true end
+        model = model:FindFirstAncestorWhichIsA("Model")
+    end
+    return false
+end
+
+local function isOwnCharacter(obj)
+    local char = LocalPlayer.Character
+    return char ~= nil and obj:IsDescendantOf(char)
+end
+
+local function nameIsDecor(name)
+    name = string.lower(name)
+    if string.find(name, "rocket", 1, true) then return false end
+    for _, kw in ipairs(CONFIG.DECOR_KEYWORDS) do
+        if string.find(name, kw, 1, true) then return true end
+    end
+    return false
+end
+
+local function isInteractive(part)
+    return part:FindFirstChildOfClass("TouchTransmitter")
+        or part:FindFirstChildWhichIsA("ProximityPrompt")
+        or part:FindFirstChildOfClass("ClickDetector")
+        or (part.Parent and part.Parent:FindFirstChildWhichIsA("ProximityPrompt"))
+end
+
+local function isDecor(part)
+    if part.Transparency >= 1 or isInteractive(part) or isInCharacterOrTool(part) then
+        return false
+    end
+    local s = part.Size
+    local maxSize = math.max(s.X, s.Y, s.Z)
+
+    local named = nameIsDecor(part.Name)
+        or (part.Parent and part.Parent ~= Workspace and nameIsDecor(part.Parent.Name))
+    if named then
+        -- не видаляємо великі тверді деталі (щоб не провалитися крізь підлогу "Grass")
+        return (not part.CanCollide) or maxSize <= CONFIG.DECOR_MAX_SIZE
+    end
+
+    -- дрібний декор, крізь який і так проходиш
+    return part.Anchored and not part.CanCollide and maxSize <= CONFIG.SMALL_DECOR_SIZE
+end
+
+---------------------------------------------------------------------
+-- 7. Звуки та анімації
+local handled = setmetatable({}, { __mode = "k" })
+
+local function killSound(s)
+    if handled[s] then return end
+    handled[s] = true
+    s.Volume = 0
+    s:Stop()
+    s:GetPropertyChangedSignal("Playing"):Connect(function()
+        if s.Playing then s:Stop() end
+    end)
+    s:GetPropertyChangedSignal("Volume"):Connect(function()
+        if s.Volume ~= 0 then s.Volume = 0 end
+    end)
+end
+
+local function killAnimator(a)
+    if handled[a] then return end
+    handled[a] = true
+    for _, track in ipairs(a:GetPlayingAnimationTracks()) do
+        track:Stop(0)
+    end
+    a.AnimationPlayed:Connect(function(track) track:Stop(0) end)
+end
+
+---------------------------------------------------------------------
+-- 8. Дальність прорисовки (реєстр деталей)
+local cullParts = setmetatable({}, { __mode = "k" })
+local culled    = setmetatable({}, { __mode = "k" })
+
+local function registerCull(part)
+    if not CONFIG.RENDER_DISTANCE then return end
+    if part.Transparency >= 1 or isOwnCharacter(part) then return end
+    cullParts[part] = true
+end
+
+---------------------------------------------------------------------
+-- 9. Обробка одного об'єкта
 local function optimize(obj)
     local class = obj.ClassName
 
+    if CONFIG.DISABLE_SOUNDS and class == "Sound" then killSound(obj) return end
+    if CONFIG.DISABLE_ANIMATIONS and class == "Animator" then killAnimator(obj) return end
+
     if obj:IsA("BasePart") then
+        if obj:IsA("Terrain") then return end
+        if CONFIG.DELETE_DECOR and isDecor(obj) then obj:Destroy() return end
+
         obj.CastShadow = false
         obj.Reflectance = 0
         if CONFIG.PLASTIC_MATERIALS and not KEEP_MATERIAL[obj.Material] then
@@ -152,6 +269,7 @@ local function optimize(obj)
         elseif obj:IsA("PartOperation") and CONFIG.LOW_MESH_DETAIL then
             setHidden(obj, "RenderFidelity", Enum.RenderFidelity.Performance)
         end
+        registerCull(obj)
         return
     end
 
@@ -175,18 +293,13 @@ local function optimize(obj)
         obj.Enabled = false
         return
     end
-    if CONFIG.DISABLE_VIEWPORTS and class == "ViewportFrame" then
-        obj.Visible = false
-        return
-    end
 end
 
 local function safeOptimize(obj) pcall(optimize, obj) end
 
 ---------------------------------------------------------------------
--- 6. Прохід по грі пачками + нові об'єкти
-local function processContainer(container)
-    local list = container:GetDescendants()
+-- 10. Прохід по грі пачками + нові об'єкти
+local function processList(list)
     for i = 1, #list do
         safeOptimize(list[i])
         if i % CONFIG.BATCH_SIZE == 0 then RunService.Heartbeat:Wait() end
@@ -194,18 +307,68 @@ local function processContainer(container)
 end
 
 local function hook(container)
-    task.spawn(processContainer, container)
+    task.spawn(function() processList(container:GetDescendants()) end)
     container.DescendantAdded:Connect(function(obj) task.defer(safeOptimize, obj) end)
 end
 
 hook(Workspace)
 hook(Lighting)
-if CONFIG.DISABLE_VIEWPORTS then
-    task.spawn(function() hook(LocalPlayer:WaitForChild("PlayerGui")) end)
+
+-- Звуки можуть бути будь-де (SoundService, PlayerGui, ReplicatedStorage...)
+if CONFIG.DISABLE_SOUNDS then
+    task.spawn(function()
+        local ok, all = try(function() return game:GetDescendants() end)
+        if ok then
+            for i, obj in ipairs(all) do
+                if obj:IsA("Sound") then pcall(killSound, obj) end
+                if i % 2000 == 0 then RunService.Heartbeat:Wait() end
+            end
+        end
+    end)
+    game.DescendantAdded:Connect(function(obj)
+        if obj:IsA("Sound") then task.defer(pcall, killSound, obj) end
+    end)
 end
 
 ---------------------------------------------------------------------
--- 7. Камера
+-- 11. Цикл дальності прорисовки
+if CONFIG.RENDER_DISTANCE then
+    task.spawn(function()
+        local dist = CONFIG.RENDER_DISTANCE
+        while true do
+            local cam = Workspace.CurrentCamera
+            if cam then
+                local list, n = {}, 0
+                for p in pairs(cullParts) do n += 1; list[n] = p end
+
+                local pos = cam.CFrame.Position
+                for i = 1, n do
+                    local p = list[i]
+                    if p.Parent then
+                        local s = p.Size
+                        local radius = math.max(s.X, s.Y, s.Z) * 0.5
+                        local far = (p.Position - pos).Magnitude - radius > dist
+                        if far ~= (culled[p] == true) then
+                            culled[p] = far or nil
+                            p.LocalTransparencyModifier = far and 1 or 0
+                        end
+                    else
+                        cullParts[p] = nil
+                        culled[p] = nil
+                    end
+                    if i % 3000 == 0 then
+                        RunService.Heartbeat:Wait()
+                        pos = cam.CFrame.Position
+                    end
+                end
+            end
+            task.wait(CONFIG.CULL_INTERVAL)
+        end
+    end)
+end
+
+---------------------------------------------------------------------
+-- 12. Камера
 if CONFIG.FIELD_OF_VIEW then
     local function applyFov()
         local cam = Workspace.CurrentCamera
@@ -216,7 +379,7 @@ if CONFIG.FIELD_OF_VIEW then
 end
 
 ---------------------------------------------------------------------
--- 8. Вимкнення 3D (клавіша + коли вікно не в фокусі)
+-- 13. Вимкнення 3D (клавіша + коли вікно не в фокусі)
 local manual3DOff = false
 local function set3D(on) try(function() RunService:Set3dRenderingEnabled(on) end) end
 
@@ -240,7 +403,7 @@ if CONFIG.PAUSE_3D_UNFOCUSED then
 end
 
 ---------------------------------------------------------------------
--- 9. Лічильник FPS
+-- 14. Лічильник FPS
 do
     local gui = Instance.new("ScreenGui")
     gui.Name = "UltraFPSCounter"
@@ -271,4 +434,4 @@ do
     end)
 end
 
-print("[UltraFPSBoost v2] Активовано")
+print("[UltraFPSBoost v3] Активовано")
